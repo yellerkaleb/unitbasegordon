@@ -19,12 +19,13 @@
 - 10+ hours of downloads and configuaration
 - Coding was drag and drop mostly, with some minor C++ code
 - Was fun, stressful, educational, complicated, challenging, great potential, I can finally say I built a game!
-- 20+ hours coding/configuring, 3GB, distribution package 670MB, code is included
-- App folder: `/App/Windows/`
-- To play download App folder then run `ShooterGame.exe` on Windows only
+- 20+ hours coding/configuring, 72MB
+- Executable [App Download](https://drive.google.com/drive/folders/1DJYbPgR_Ouc1mOvbb7OEU6aaS0-9JUeL?usp=sharing), run `ShooterGame.exe` (Windows only)
 
 ## Conclusion
 
 - Learned a new skill, always loved games, but this is first time writing one, had fun with it
 - Although unrelated to Real Estate, or backend development, one thing I can appreciate is the blueprint workflow design in Unreal Engine's platform
 - The workflow idea could be applied to Unit Base's architecture, and allow end-users' a custom design interface and workflow automation
+
+_Note: ShooterGame coding standards are not implemented, since I was learning from a tutorial, and followed their coding practices while being tutored._
