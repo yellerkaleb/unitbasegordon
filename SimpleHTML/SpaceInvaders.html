@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Space InvadersFlight Simulator Demo</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: #222;
+      overflow: hidden;
+    }
+    #root {
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas {
+      background: linear-gradient(to top, #4e8cff 0%, #e0f7fa 100%);
+      border-radius: 12px;
+      box-shadow: 0 4px 24px #0008;
+      touch-action: none;
+      display: block;
+    }
+    .score {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #fff;
+      font-size: 2rem;
+      font-family: monospace;
+      text-shadow: 0 2px 8px #000a;
+      z-index: 2;
+      pointer-events: none;
+    }
+    .gameover {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff;
+      font-size: 2.5rem;
+      font-family: monospace;
+      text-shadow: 0 2px 8px #000a;
+      z-index: 3;
+      background: rgba(0,0,0,0.7);
+      padding: 24px 36px;
+      border-radius: 16px;
+      text-align: center;
+    }
+    .restart-btn {
+      margin-top: 18px;
+      font-size: 1.2rem;
+      padding: 8px 24px;
+      border: none;
+      border-radius: 8px;
+      background: #4e8cff;
+      color: #fff;
+      cursor: pointer;
+      box-shadow: 0 2px 8px #0004;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- React, ReactDOM, Babel/TypeScript via CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel" data-type="module" data-presets="typescript,react">
+    const { useRef, useEffect, useState } = React;
+
+    // --- Game Constants ---
+    const CANVAS_WIDTH = 420;
+    const CANVAS_HEIGHT = 700;
+    const PLAYER_SIZE = 44;
+    const PLAYER_COLOR = '#f5f5f5';
+    const PLAYER_SPEED = 6;
+    const BULLET_WIDTH = 6;
+    const BULLET_HEIGHT = 18;
+    const BULLET_COLOR = '#ffeb3b';
+    const BULLET_SPEED = 10;
+    const ENEMY_SIZE = 38;
+    const ENEMY_COLOR = '#e53935';
+    const ENEMY_SPEED = 2.5;
+    const ENEMY_BULLET_COLOR = '#00e5ff';
+    const ENEMY_BULLET_SPEED = 6;
+    const ENEMY_SPAWN_INTERVAL = 1200; // ms
+    const PLAYER_LIVES = 3;
+
+    // --- Types ---
+    /** @typedef {{ x: number, y: number }} Vec2 */
+    /** @typedef {{ pos: Vec2, vel: Vec2, from: 'player' | 'enemy' }} Bullet */
+    /** @typedef {{ pos: Vec2, vel: Vec2, cooldown: number }} Enemy */
+
+    // --- Main Game Component ---
+    function SpaceInvadersFlightSim() {
+      const canvasRef = useRef(null);
+      const [score, setScore] = useState(0);
+      const [lives, setLives] = useState(PLAYER_LIVES);
+      const [gameOver, setGameOver] = useState(false);
+      const [restartKey, setRestartKey] = useState(0);
+      const [canvasDims, setCanvasDims] = useState({w: CANVAS_WIDTH, h: CANVAS_HEIGHT});
+      const [muted, setMuted] = useState(false);
+      const [bombCooldown, setBombCooldown] = useState(0);
+      const bombLastUsed = useRef(Date.now() - 30000);
+
+      /** @type {React.MutableRefObject<Vec2>} */
+      const player = useRef({ x: CANVAS_WIDTH/2, y: CANVAS_HEIGHT-80 });
+      /** @type {React.MutableRefObject<Bullet[]>} */
+      const bullets = useRef([]);
+      /** @type {React.MutableRefObject<Enemy[]>} */
+      const enemies = useRef([]);
+      /** @type {React.MutableRefObject<Bullet[]>} */
+      const enemyBullets = useRef([]);
+      const lastEnemySpawn = useRef(Date.now());
+      const lastPlayerShot = useRef(Date.now());
+      const touchId = useRef(null);
+      const offset = useRef({x:0, y:0});
+      const animRef = useRef();
+      const running = useRef(true);
+      const playerInvincibleUntil = useRef(0);
+
+      // --- Radar/Minimap ---
+      function drawRadar(ctx) {
+        const radarW = 100, radarH = 60;
+        const margin = 12;
+        ctx.save();
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = '#222';
+        ctx.fillRect(CANVAS_WIDTH - radarW - margin, margin, radarW, radarH);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(CANVAS_WIDTH - radarW - margin, margin, radarW, radarH);
+        // Player dot
+        ctx.fillStyle = '#1976d2';
+        ctx.beginPath();
+        ctx.arc(CANVAS_WIDTH - radarW/2 - margin, margin + radarH - 10, 5, 0, 2*Math.PI);
+        ctx.fill();
+        // UFO dots
+        enemies.current.forEach(e => {
+          let size = e.size || ENEMY_SIZE;
+          // Map world to radar
+          let rx = CANVAS_WIDTH - radarW - margin + (e.pos.x / CANVAS_WIDTH) * radarW;
+          let ry = margin + (e.pos.y / CANVAS_HEIGHT) * radarH;
+          ctx.fillStyle = e.color || '#e53935';
+          ctx.beginPath();
+          ctx.arc(rx, ry, Math.max(2, size/ENEMY_SIZE*3), 0, 2*Math.PI);
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+
+      // --- Bomb Everything ---
+      function useBomb() {
+        if (bombCooldown > 0) return;
+        enemies.current = [];
+        enemyBullets.current = [];
+        bombLastUsed.current = Date.now();
+        setBombCooldown(30);
+      }
+      // Bomb cooldown timer
+      useEffect(() => {
+        if (bombCooldown <= 0) return;
+        const interval = setInterval(() => {
+          setBombCooldown(c => c > 0 ? c-1 : 0);
+        }, 1000);
+        return () => clearInterval(interval);
+      }, [bombCooldown]);
+      // Bomb cooldown reset on restart
+      useEffect(() => {
+        setBombCooldown(0);
+        bombLastUsed.current = Date.now() - 30000;
+      }, [restartKey]);
+
+      // --- Enhanced Firing ---
+      function getBulletPattern() {
+        // Every 10 kills, add another bullet (max 5)
+        const n = Math.min(1 + Math.floor(score/10), 5);
+        const spread = Math.PI/16 + (score >= 10 ? (Math.min(score,40)-10)/30 * Math.PI/16 : 0);
+        let angles = [];
+        if (n === 1) angles = [0];
+        else {
+          for (let i = 0; i < n; ++i) {
+            angles.push(-spread/2 + (spread/(n-1))*i);
+          }
+        }
+        return angles;
+      }
+
+      // --- Enhanced UFO Intensity ---
+      function getDifficulty() {
+        // Dramatically increase difficulty every 10 kills
+        const minInterval = 50; // min ms between shots
+        const maxInterval = 350; // max ms between shots
+        const minEnemySpawn = 100; // min ms between spawns
+        const maxEnemySpawn = 1200; // max ms between spawns
+        const minEnemyCooldown = 6; // min frames between enemy shots
+        const maxEnemyCooldown = 80; // max frames between enemy shots
+        const baseEnemySpeed = ENEMY_SPEED;
+        const baseEnemyBulletSpeed = ENEMY_BULLET_SPEED;
+        const extra = Math.floor(score/10);
+        // Each 10 kills, ramp up more
+        const fireInterval = Math.max(minInterval, maxInterval - (maxInterval-minInterval)*(score/50) - extra*18);
+        const enemySpawn = Math.max(minEnemySpawn, maxEnemySpawn - (maxEnemySpawn-minEnemySpawn)*(score/50) - extra*90);
+        const enemyCooldown = Math.max(minEnemyCooldown, Math.round(maxEnemyCooldown - (maxEnemyCooldown-minEnemyCooldown)*(score/50) - extra*7));
+        const enemySpeed = baseEnemySpeed + extra*1.1;
+        const enemyBulletSpeed = baseEnemyBulletSpeed + extra*0.7;
+        return { fireInterval, enemySpawn, enemyCooldown, enemySpeed, enemyBulletSpeed };
+      }
+
+      // --- Responsive Canvas ---
+      useEffect(() => {
+        function resize() {
+          const vw = window.innerWidth, vh = window.innerHeight;
+          let scale = Math.min(vw/CANVAS_WIDTH, vh/CANVAS_HEIGHT, 1);
+          setCanvasDims({w: CANVAS_WIDTH*scale, h: CANVAS_HEIGHT*scale});
+        }
+        resize();
+        window.addEventListener('resize', resize);
+        return () => window.removeEventListener('resize', resize);
+      }, []);
+
+      // --- Game Loop ---
+      useEffect(() => {
+        running.current = true;
+        setScore(0);
+        setLives(PLAYER_LIVES);
+        setGameOver(false);
+        player.current = { x: CANVAS_WIDTH/2, y: CANVAS_HEIGHT-80 };
+        bullets.current = [];
+        enemies.current = [];
+        enemyBullets.current = [];
+        lastEnemySpawn.current = Date.now();
+        lastPlayerShot.current = Date.now();
+
+        function loop() {
+          if (!running.current) return;
+          update();
+          draw();
+          animRef.current = requestAnimationFrame(loop);
+        }
+        animRef.current = requestAnimationFrame(loop);
+        return () => {
+          running.current = false;
+          cancelAnimationFrame(animRef.current);
+        };
+      }, [restartKey]);
+
+      // --- Draw Game ---
+      function draw() {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.save();
+        ctx.scale(canvas.width/CANVAS_WIDTH, canvas.height/CANVAS_HEIGHT);
+
+        // Draw player (F-16)
+        ctx.save();
+        ctx.translate(player.current.x, player.current.y);
+        ctx.save();
+        ctx.rotate(0); // Point up (0 radians is up in canvas)
+        // Visual cue for invincibility
+        if (Date.now() < playerInvincibleUntil.current) {
+          ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(Date.now()/80));
+        }
+        ctx.beginPath();
+        ctx.moveTo(0, -PLAYER_SIZE/2); // Nose (top)
+        ctx.lineTo(-PLAYER_SIZE/4, PLAYER_SIZE/6); // Left wing
+        ctx.lineTo(-PLAYER_SIZE/8, PLAYER_SIZE/8); // Left body
+        ctx.lineTo(-PLAYER_SIZE/8, PLAYER_SIZE/2.5); // Left tail
+        ctx.lineTo(0, PLAYER_SIZE/3); // Tail center
+        ctx.lineTo(PLAYER_SIZE/8, PLAYER_SIZE/2.5); // Right tail
+        ctx.lineTo(PLAYER_SIZE/8, PLAYER_SIZE/8); // Right body
+        ctx.lineTo(PLAYER_SIZE/4, PLAYER_SIZE/6); // Right wing
+        ctx.closePath();
+        ctx.fillStyle = '#b0bec5'; // Space Invadersgray
+        ctx.shadowColor = '#fff8';
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        // Cockpit
+        ctx.beginPath();
+        ctx.ellipse(0, -PLAYER_SIZE/3.2, PLAYER_SIZE/10, PLAYER_SIZE/7, 0, 0, 2*Math.PI);
+        ctx.fillStyle = '#1976d2';
+        ctx.globalAlpha = 0.7;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        ctx.restore();
+
+        // Draw bullets
+        bullets.current.forEach(b => {
+          if (b.from === 'player') {
+            // Increase bullet size after 10 kills
+            let size = score >= 10 ? BULLET_WIDTH*2 : BULLET_WIDTH;
+            let height = score >= 10 ? BULLET_HEIGHT*1.5 : BULLET_HEIGHT;
+            ctx.fillRect(b.pos.x-size/2, b.pos.y-height/2, size, height);
+          }
+        });
+        // Draw enemy bullets
+        enemyBullets.current.forEach(b => {
+          ctx.fillStyle = b.color || ENEMY_BULLET_COLOR;
+          let size = b.size || BULLET_WIDTH;
+          ctx.fillRect(b.pos.x-size/2, b.pos.y-size/2, size, size*1.5);
+        });
+        // Draw enemies (variety)
+        enemies.current.forEach(e => {
+          ctx.save();
+          ctx.translate(e.pos.x, e.pos.y);
+          // UFO variety
+          let shape = e.shape || 'saucer';
+          let color = e.color || '#8d6e63';
+          let domeColor = e.domeColor || '#00e5ff';
+          let size = e.size || ENEMY_SIZE;
+          if (shape === 'saucer') {
+            // Saucer base
+            ctx.beginPath();
+            ctx.ellipse(0, 0, size/2, size/4, 0, 0, 2*Math.PI);
+            ctx.fillStyle = color;
+            ctx.shadowColor = '#e53935aa';
+            ctx.shadowBlur = 8;
+            ctx.fill();
+            // Saucer dome
+            ctx.beginPath();
+            ctx.ellipse(0, -size/8, size/4, size/8, 0, 0, 2*Math.PI);
+            ctx.fillStyle = domeColor;
+            ctx.globalAlpha = 0.7;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            // Saucer lights
+            for (let i = -2; i <= 2; i++) {
+              ctx.beginPath();
+              ctx.arc(i*size/8, size/8, size/18, 0, 2*Math.PI);
+              ctx.fillStyle = i % 2 === 0 ? '#ffeb3b' : '#ff1744';
+              ctx.fill();
+            }
+          } else if (shape === 'orb') {
+            // Orb UFO
+            ctx.beginPath();
+            ctx.arc(0, 0, size/2, 0, 2*Math.PI);
+            ctx.fillStyle = color;
+            ctx.shadowColor = domeColor;
+            ctx.shadowBlur = 12;
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(0, 0, size/3, 0, 2*Math.PI);
+            ctx.fillStyle = domeColor;
+            ctx.globalAlpha = 0.5;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          } else if (shape === 'triangle') {
+            // Triangle UFO
+            ctx.beginPath();
+            ctx.moveTo(0, -size/2);
+            ctx.lineTo(-size/2, size/2);
+            ctx.lineTo(size/2, size/2);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.shadowColor = domeColor;
+            ctx.shadowBlur = 10;
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(0, 0, size/6, 0, 2*Math.PI);
+            ctx.fillStyle = domeColor;
+            ctx.globalAlpha = 0.7;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+          ctx.restore();
+        });
+        ctx.restore();
+        // Draw radar
+        drawRadar(ctx);
+      }
+
+      // --- UFO Variety on Spawn ---
+      function randomUFO() {
+        const shapes = ['saucer', 'orb', 'triangle'];
+        const colors = ['#8d6e63', '#607d8b', '#c62828', '#43a047', '#fbc02d', '#3949ab'];
+        const domes = ['#00e5ff', '#ffeb3b', '#1976d2', '#ff1744', '#00bfae'];
+        return {
+          shape: shapes[Math.floor(Math.random()*shapes.length)],
+          color: colors[Math.floor(Math.random()*colors.length)],
+          domeColor: domes[Math.floor(Math.random()*domes.length)],
+          size: ENEMY_SIZE * (0.8 + Math.random()*0.8),
+          bulletSize: BULLET_WIDTH * (0.8 + Math.random()*1.5)
+        };
+      }
+
+      // --- Update Game State ---
+      function update() {
+        const now = Date.now();
+        const { fireInterval, enemySpawn, enemyCooldown, enemySpeed, enemyBulletSpeed } = getDifficulty();
+
+        // Autofire: shoot if enough time has passed
+        if (!gameOver && now - lastPlayerShot.current > fireInterval) {
+          const angles = getBulletPattern();
+          angles.forEach(a => {
+            bullets.current.push({
+              pos: { x: player.current.x, y: player.current.y - PLAYER_SIZE/2 },
+              vel: { x: Math.sin(a)*BULLET_SPEED, y: -Math.cos(a)*BULLET_SPEED },
+              from: 'player',
+              angle: a
+            });
+          });
+          lastPlayerShot.current = now;
+        }
+
+        // Move bullets
+        bullets.current.forEach(b => {
+          b.pos.x += b.vel.x;
+          b.pos.y += b.vel.y;
+        });
+        bullets.current = bullets.current.filter(b => b.pos.y > -40 && b.pos.y < CANVAS_HEIGHT+40);
+
+        // Move enemy bullets
+        enemyBullets.current.forEach(b => {
+          b.pos.x += b.vel.x;
+          b.pos.y += b.vel.y;
+        });
+        enemyBullets.current = enemyBullets.current.filter(b => b.pos.y > -40 && b.pos.y < CANVAS_HEIGHT+40);
+
+        // Move enemies
+        enemies.current.forEach(e => {
+          e.pos.x += e.vel.x;
+          e.pos.y += e.vel.y;
+          // Increase speed with difficulty
+          if (e.vel) e.vel.y = (e.baseSpeed || e.vel.y);
+          e.vel.y = enemySpeed + Math.random()*1.2;
+          // Enemy fires
+          e.cooldown -= 1;
+          if (e.cooldown <= 0) {
+            enemyBullets.current.push({
+              pos: { x: e.pos.x, y: e.pos.y + (e.size||ENEMY_SIZE)/2 },
+              vel: { x: 0, y: enemyBulletSpeed },
+              from: 'enemy',
+              color: e.domeColor,
+              size: e.bulletSize
+            });
+            e.cooldown = enemyCooldown + Math.random()*enemyCooldown;
+          }
+        });
+        enemies.current = enemies.current.filter(e => e.pos.y < CANVAS_HEIGHT+(e.size||ENEMY_SIZE));
+
+        // Spawn new enemies
+        if (now - lastEnemySpawn.current > enemySpawn) {
+          const x = 40 + Math.random()*(CANVAS_WIDTH-80);
+          const ufo = randomUFO();
+          enemies.current.push({
+            pos: { x, y: -ufo.size },
+            vel: { x: (Math.random()-0.5)*1.5, y: ENEMY_SPEED + Math.random()*1.2 },
+            cooldown: enemyCooldown + Math.random()*enemyCooldown,
+            ...ufo
+          });
+          lastEnemySpawn.current = now;
+        }
+
+        // Bullet-enemy collisions
+        bullets.current = bullets.current.filter(b => {
+          if (b.from !== 'player') return true;
+          for (let i = 0; i < enemies.current.length; ++i) {
+            const e = enemies.current[i];
+            let size = e.size || ENEMY_SIZE;
+            if (Math.abs(b.pos.x - e.pos.x) < (size+BULLET_WIDTH)/2 && Math.abs(b.pos.y - e.pos.y) < (size+BULLET_HEIGHT)/2) {
+              enemies.current.splice(i,1);
+              setScore(s => s+1);
+              return false;
+            }
+          }
+          return true;
+        });
+
+        // Enemy bullet - player collision
+        if (Date.now() > playerInvincibleUntil.current) {
+          for (let b of enemyBullets.current) {
+            let size = b.size || BULLET_WIDTH;
+            if (Math.abs(b.pos.x - player.current.x) < (PLAYER_SIZE+size)/2 && Math.abs(b.pos.y - player.current.y) < (PLAYER_SIZE+size*1.5)/2) {
+              loseLife();
+              break;
+            }
+          }
+          // Enemy - player collision
+          for (let e of enemies.current) {
+            let size = e.size || ENEMY_SIZE;
+            if (Math.abs(e.pos.x - player.current.x) < (PLAYER_SIZE+size)/2-6 && Math.abs(e.pos.y - player.current.y) < (PLAYER_SIZE+size)/2-6) {
+              loseLife();
+              break;
+            }
+          }
+        }
+      }
+
+      function loseLife() {
+        if (Date.now() < playerInvincibleUntil.current) return;
+        setLives(l => {
+          if (l > 1) {
+            // Only decrement lives, do not end game
+            return l-1;
+          }
+          // Only set game over when lives reach 0
+          setGameOver(true);
+          running.current = false;
+          return 0;
+        });
+        // Reset player position
+        player.current = { x: CANVAS_WIDTH/2, y: CANVAS_HEIGHT-80 };
+        // Clear bullets near player
+        enemyBullets.current = enemyBullets.current.filter(b => Math.abs(b.pos.y - player.current.y) > 60);
+        // Set invincibility window (1.2s)
+        playerInvincibleUntil.current = Date.now() + 1200;
+      }
+
+      // --- Touch Controls ---
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        function getTouchPos(e) {
+          const rect = canvas.getBoundingClientRect();
+          const t = e.touches[0];
+          const scaleX = CANVAS_WIDTH / rect.width;
+          const scaleY = CANVAS_HEIGHT / rect.height;
+          return {
+            x: (t.clientX - rect.left) * scaleX,
+            y: (t.clientY - rect.top) * scaleY,
+          };
+        }
+        function onTouchStart(e) {
+          if (e.touches.length === 1) {
+            touchId.current = e.touches[0].identifier;
+            const pos = getTouchPos(e);
+            offset.current = {
+              x: player.current.x - pos.x,
+              y: player.current.y - pos.y,
+            };
+          }
+        }
+        function onTouchMove(e) {
+          if (touchId.current === null) return;
+          for (let i=0; i<e.touches.length; ++i) {
+            if (e.touches[i].identifier === touchId.current) {
+              const pos = getTouchPos(e);
+              player.current.x = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_WIDTH-PLAYER_SIZE/2, pos.x + offset.current.x));
+              player.current.y = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_HEIGHT-PLAYER_SIZE/2, pos.y + offset.current.y));
+              break;
+            }
+          }
+        }
+        function onTouchEnd(e) {
+          if (touchId.current !== null) {
+            touchId.current = null;
+          }
+        }
+        canvas.addEventListener('touchstart', onTouchStart);
+        canvas.addEventListener('touchmove', onTouchMove);
+        canvas.addEventListener('touchend', onTouchEnd);
+        return () => {
+          canvas.removeEventListener('touchstart', onTouchStart);
+          canvas.removeEventListener('touchmove', onTouchMove);
+          canvas.removeEventListener('touchend', onTouchEnd);
+        };
+      }, [restartKey]);
+
+      // --- Mouse Controls (for desktop testing) ---
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        let dragging = false;
+        let mouseOffset = {x:0, y:0};
+        function getMousePos(e) {
+          const rect = canvas.getBoundingClientRect();
+          const scaleX = CANVAS_WIDTH / rect.width;
+          const scaleY = CANVAS_HEIGHT / rect.height;
+          return {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY,
+          };
+        }
+        function onMouseDown(e) {
+          dragging = true;
+          const pos = getMousePos(e);
+          mouseOffset = {
+            x: player.current.x - pos.x,
+            y: player.current.y - pos.y,
+          };
+        }
+        function onMouseMove(e) {
+          if (!dragging) return;
+          const pos = getMousePos(e);
+          player.current.x = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_WIDTH-PLAYER_SIZE/2, pos.x + mouseOffset.x));
+          player.current.y = Math.max(PLAYER_SIZE/2, Math.min(CANVAS_HEIGHT-PLAYER_SIZE/2, pos.y + mouseOffset.y));
+        }
+        function onMouseUp() { dragging = false; }
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+        return () => {
+          canvas.removeEventListener('mousedown', onMouseDown);
+          canvas.removeEventListener('mousemove', onMouseMove);
+          window.removeEventListener('mouseup', onMouseUp);
+        };
+      }, [restartKey]);
+
+      // --- Keyboard Controls (for desktop testing) ---
+      useEffect(() => {
+        let keyState = { ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false };
+        function onKeyDown(e) {
+          if (gameOver) return;
+          if (e.key in keyState) keyState[e.key] = true;
+        }
+        function onKeyUp(e) {
+          if (e.key in keyState) keyState[e.key] = false;
+        }
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        // Movement loop
+        let moveAnim;
+        function moveLoop() {
+          if (!gameOver) {
+            if (keyState.ArrowLeft) {
+              player.current.x = Math.max(PLAYER_SIZE/2, player.current.x - PLAYER_SPEED);
+            }
+            if (keyState.ArrowRight) {
+              player.current.x = Math.min(CANVAS_WIDTH-PLAYER_SIZE/2, player.current.x + PLAYER_SPEED);
+            }
+            if (keyState.ArrowUp) {
+              player.current.y = Math.max(PLAYER_SIZE/2, player.current.y - PLAYER_SPEED);
+            }
+            if (keyState.ArrowDown) {
+              player.current.y = Math.min(CANVAS_HEIGHT-PLAYER_SIZE/2, player.current.y + PLAYER_SPEED);
+            }
+          }
+          moveAnim = requestAnimationFrame(moveLoop);
+        }
+        moveAnim = requestAnimationFrame(moveLoop);
+        return () => {
+          window.removeEventListener('keydown', onKeyDown);
+          window.removeEventListener('keyup', onKeyUp);
+          cancelAnimationFrame(moveAnim);
+        };
+      }, [gameOver, restartKey]);
+
+      // --- Shooting ---
+      // (Manual shooting removed, now handled by autofire in update())
+
+      // --- Restart ---
+      function restart() {
+        setRestartKey(k => k+1);
+      }
+
+      // --- Sound Effects ---
+
+      // --- Render ---
+      return (
+        <div style={{position:'relative', width:canvasDims.w, height:canvasDims.h}}>
+          <div className="score">Score: {score} &nbsp; | &nbsp; Lives: {lives}</div>
+          <button
+            style={{position:'absolute',bottom:24,right:24,zIndex:10,width:35,height:35,borderRadius:'50%',border:'none',background:bombCooldown>0?'#888':'#e53935',color:'#fff',boxShadow:'0 2px 8px #0004',cursor:bombCooldown>0?'not-allowed':'pointer',opacity:bombCooldown>0?0.7:1,fontSize:'1.5rem',display:'flex',alignItems:'center',justifyContent:'center',padding:0}}
+            onClick={useBomb}
+            disabled={bombCooldown>0}
+            title={bombCooldown>0?`Bomb available in ${bombCooldown}s`:"Bomb Everything"}
+          >💣</button>
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_WIDTH}
+            height={CANVAS_HEIGHT}
+            style={{width:canvasDims.w, height:canvasDims.h, touchAction:'none'}}
+          />
+          {gameOver && (
+            <div className="gameover">
+              <div>Game Over</div>
+              <div style={{fontSize:'1.2rem', marginTop:8}}>Score: {score}</div>
+              <button className="restart-btn" onClick={restart}>Restart</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<SpaceInvadersFlightSim />);
+  </script>
+</body>
+</html> 
