@@ -608,6 +608,12 @@
         };
       }, [restartKey]);
 
+      useEffect(() => {
+        if (gameOver) {
+          saveLastScore(score);
+        }
+      }, [gameOver]);
+
       // --- Keyboard Controls (for desktop testing) ---
       useEffect(() => {
         let keyState = { ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false };
@@ -652,6 +658,7 @@
 
       // --- Restart ---
       function restart() {
+        loadLastScore();
         setRestartKey(k => k+1);
       }
 
@@ -673,16 +680,27 @@
             height={CANVAS_HEIGHT}
             style={{width:canvasDims.w, height:canvasDims.h, touchAction:'none'}}
           />
-          {gameOver && (
+          {gameOver &&  (
             <div className="gameover">
               <div>Game Over</div>
-              <div style={{fontSize:'1.2rem', marginTop:8}}>Score: {score}</div>
+              <div style={{fontSize:'1.2rem', marginTop:8}}>
+                Score: {score}
+              </div>
               <button className="restart-btn" onClick={restart}>Restart</button>
             </div>
           )}
         </div>
       );
     }
+
+    function saveLastScore(score) {
+      localStorage.setItem('lastScore', score);
+    }
+
+    function loadLastScore() {
+      return console.log('Last scorel: ' + localStorage.getItem('lastScore'));
+    }
+
 
     ReactDOM.createRoot(document.getElementById('root')).render(<SpaceInvadersFlightSim />);
   </script>
